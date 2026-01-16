@@ -1,32 +1,67 @@
 import { Octokit } from "@octokit/rest";
 
-// Initialize Octokit with your Fine-grained token
+// Initialize Octokit with your fine-grained token (server-side only)
 const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN, // server-side only
+  auth: process.env.GITHUB_TOKEN,
 });
 
-/**
- * Fetch all service issues from GitHub
- * Each Issue represents a service, labels define status
- */
-export async function getServices() {
-  const [owner, repo] = (process.env.GITHUB_REPO || "").split("/");
-  if (!owner || !repo) throw new Error("Missing GITHUB_REPO env");
+// Type for service returned to the frontend
+export interface ServiceStatus {
+  name: string;
+  status: string;       // up | down | degraded | unknown
+  lastUpdated: string;
+  commentsUrl?: string;
+}
 
-  // Fetch all open issues with relevant labels
+/**
+ * Fetch all services from GitHub Issues
+ * Each issue represents a service
+ */
+export async function getServices(): Promise<ServiceStatus[]> {
+  const repoEnv = process.env.GITHUB_REPO;
+  if (!repoEnv) throw new Error("Missing GITHUB_REPO env variable");
+
+  const [owner, repo] = repoEnv.split("/");
+  if (!owner || !repo) throw new Error("Invalid GITHUB_REPO format, should be 'owner/repo'");
+
+  // List all open issues with status labels
   const { data: issues } = await octokit.issues.listForRepo({
     owner,
     repo,
     state: "open",
     labels: "up,down,degraded",
-    per_page: 100, // adjust if you have more than 100 services
+    per_page: 100,
   });
 
-  // Map issues to service objects
-  return issues.map(issue => ({
-    name: issue.title,                     // Service name
-    status: issue.labels[0]?.name || "unknown", // Label defines status
-    lastUpdated: issue.updated_at,         // Last updated timestamp
-    commentsUrl: issue.comments_url,       // Optional: fetch comments if you want
+  // Map issues to our service format
+  return issues.map((issue) => {
+    const firstLabel = issue.labels[0];
+    let status: string;
+
+    // Handle labels that may be strings or objects
+    if (typeof firstLabel === "string") {
+      status = firstLabel;
+    } else {
+      status = firstLabel?.name || "unknown";
+    }
+
+    return {
+      name: issue.title,
+      status,
+      lastUpdated: issue.updated_at,
+      commentsUrl: issue.comments_url,
+    };
+  });
+}
+
+/**
+ * Optional helper to fetch latest comments for a service
+ */
+export async function getServiceComments(commentsUrl: string) {
+  const res = await octokit.request(`GET ${commentsUrl}`);
+  return res.data.map((comment: any) => ({
+    body: comment.body,
+    updated: comment.updated_at,
+    author: comment.user?.login,
   }));
 }
