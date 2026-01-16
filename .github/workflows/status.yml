@@ -1,0 +1,75 @@
+name: "Update Status"
+
+on:
+  schedule:
+    - cron: "*/5 * * * *" # every 5 minutes
+  workflow_dispatch:
+
+jobs:
+  check-services:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Update service statuses
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require("@actions/core");
+            const fetch = require("node-fetch");
+
+            // Define services to check
+            const services = [
+              { name: "Website", url: "https://hunt.theveridionlibrary.org/status" },
+            ];
+
+            for (const service of services) {
+              core.startGroup(`Fetching status of ${service.name}`);
+
+              let status = "up";
+              try {
+                console.log(`Pinging ${service.url} ...`);
+                const res = await fetch(service.url);
+                if (!res.ok) status = "degraded";
+              } catch (err) {
+                console.log("Request failed:", err.message);
+                status = "down";
+              }
+
+              console.log(`Result for ${service.name}: ${status.toUpperCase()}`);
+
+              // Fetch existing issues
+              const issues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+              });
+
+              const issue = issues.data.find(i => i.title === service.name);
+
+              if (issue) {
+                // Update labels
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [status],
+                });
+                console.log(`Updated issue #${issue.number} with label: ${status}`);
+              } else {
+                // Create new issue
+                const newIssue = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: service.name,
+                  labels: [status],
+                });
+                console.log(`Created issue #${newIssue.data.number} with label: ${status}`);
+              }
+
+              core.endGroup(); // collapsible group in GH Actions UI
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
